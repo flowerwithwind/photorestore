@@ -1,0 +1,46 @@
+# PhotoRestore Docker Compose：backend (uvicorn :8030) + frontend (nginx :5175)
+# 数据持久化：./models（模型文件）与 ./data（SQLite / uploads / outputs / tmp）
+name: photorestore
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: photorestore-backend:latest
+    container_name: photorestore-backend
+    environment:
+      PHOTORESTORE_DATA_DIR: /app/data
+      PHOTORESTORE_MODELS_DIR: /app/models
+      PHOTORESTORE_CONCURRENCY: "1"
+      PHOTORESTORE_TASK_TIMEOUT: "300"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    ports:
+      - "8030:8030"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8030/api/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: photorestore-frontend:latest
+    container_name: photorestore-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5175:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped

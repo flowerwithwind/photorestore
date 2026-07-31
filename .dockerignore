@@ -1,0 +1,33 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+.github
+
+# Python 缓存与本地环境
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# 运行时数据（由挂载卷提供，不打进镜像）
+data/
+models/
+outputs/
+logs/
+*.db
+*.sqlite*
+
+# 前端依赖与构建产物（镜像内重新构建）
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
+
+# 本地文档与 IDE
+docs/
+.idea/
+.vscode/
+*.log
