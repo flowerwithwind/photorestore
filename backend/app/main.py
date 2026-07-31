@@ -6,8 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health
+from app.api import health, images
+from app.api import storage as storage_api
+from app.api import tasks as tasks_api
 from app.config import ensure_dirs
+from app.services import tasks as tasks_svc
+from app.services.executor import TaskExecutor
 from app.storage import db
 from app.utils.errors import register_exception_handlers
 from app.utils.logging import get_logger, setup_logging
@@ -20,8 +24,17 @@ async def lifespan(app: FastAPI):
     setup_logging()
     ensure_dirs()
     db.init_db()
+    # 重启恢复：遗留 processing 任务标记为 failed（原因 restart）
+    tasks_svc.recover_interrupted_tasks()
+    # 启动线程池执行器（并发默认 1，PHOTORESTORE_CONCURRENCY 可配）
+    app.state.executor = TaskExecutor()
+    app.state.executor.start()
     logger.info("PhotoRestore 启动完成")
-    yield
+    try:
+        yield
+    finally:
+        app.state.executor.stop()
+        logger.info("PhotoRestore 已停止")
 
 
 app = FastAPI(
@@ -41,3 +54,6 @@ app.add_middleware(
 
 register_exception_handlers(app)
 app.include_router(health.router)
+app.include_router(images.router)
+app.include_router(tasks_api.router)
+app.include_router(storage_api.router)

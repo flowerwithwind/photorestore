@@ -8,9 +8,10 @@ os.environ["PHOTORESTORE_DATA_DIR"] = tempfile.mkdtemp(prefix="photorestore-test
 os.environ["PHOTORESTORE_MODELS_DIR"] = tempfile.mkdtemp(prefix="photorestore-models-test-")
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.main import app
 from app.storage import db
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture()
