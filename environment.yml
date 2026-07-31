@@ -1,0 +1,10 @@
+name: photorestore
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -r backend/requirements.txt
+      - -r backend/requirements-dev.txt
