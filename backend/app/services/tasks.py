@@ -6,7 +6,8 @@ import json
 from typing import Any
 
 from app.models import TaskStatus, now_iso
-from app.services.task_state import TaskStateError, assert_transition
+from app.services.task_event_bus import task_snapshot
+from app.services.task_state import assert_transition
 from app.storage import db
 from app.utils.errors import AppError
 from app.utils.logging import get_logger
@@ -44,24 +45,70 @@ def list_tasks(status: str | None = None, limit: int = 100, offset: int = 0) -> 
 
 
 def get_task_detail(task_id: int) -> dict:
+    """任务详情：状态/进度/阶段/参数 + 阶段时间线（phase_logs）+ 结果（含产物）。"""
     task = db.get_task(task_id)
     if task is None:
         raise AppError("task_not_found", "任务不存在", status_code=404)
+    task["phase_logs"] = db.get_phase_logs(task_id)
     return task
 
 
-def cancel_task(task_id: int) -> dict:
-    """取消任务：仅 queued 可取消；processing 暂不支持中断（需处理器协作，D3 细化）。"""
+def cancel_task(
+    task_id: int,
+    *,
+    executor: Any | None = None,
+    event_bus: Any | None = None,
+) -> dict:
+    """取消任务：queued 直接取消；processing 走协作式中断（executor 设置 cancel 事件）。
+
+    executor.cancel(task_id) 提供线程事件快速信号，DB 状态为最终依据；
+    处理链在检查点抛出 TaskCancelledError，由执行器保持 cancelled 并清理。
+    """
     task = db.get_task(task_id)
     if task is None:
         raise AppError("task_not_found", "任务不存在", status_code=404)
-    if task["status"] == TaskStatus.PROCESSING:
-        raise TaskStateError(
-            TaskStatus.PROCESSING, TaskStatus.CANCELLED, reason="任务正在处理中，暂不支持中断"
-        )
-    assert_transition(task["status"], TaskStatus.CANCELLED)
-    db.update_task_status(task_id, TaskStatus.CANCELLED, finished_at=now_iso())
+    if task["status"] not in (TaskStatus.QUEUED, TaskStatus.PROCESSING):
+        # 终态不允许再取消 → 409
+        assert_transition(task["status"], TaskStatus.CANCELLED)
+    status = task["status"]
+    # 先设置取消事件：覆盖“cancel 读到 queued 时执行器已拾起”的竞态窗口，
+    # 处理链会在下一个检查点（progress.check_cancel）中断
+    if executor is not None:
+        executor.cancel(task_id)
+    # 条件更新：仅从读到的状态迁移，避免覆盖并发写入的新状态
+    ok = db.update_task_status(
+        task_id,
+        TaskStatus.CANCELLED,
+        finished_at=now_iso(),
+        expected_status=status,
+    )
+    if not ok:
+        # 读后被并发迁移（多为 queued→processing）：按最新状态重试一次
+        task = db.get_task(task_id)
+        if task is None:
+            raise AppError("task_not_found", "任务不存在", status_code=404)
+        if task["status"] in (TaskStatus.QUEUED, TaskStatus.PROCESSING):
+            ok = db.update_task_status(
+                task_id,
+                TaskStatus.CANCELLED,
+                finished_at=now_iso(),
+                expected_status=task["status"],
+            )
+        else:
+            ok = True  # 已进入终态（succeeded/failed），保留现状
+    if ok:
+        _publish_and_close(event_bus, task_id)
     return db.get_task(task_id)
+
+
+def _publish_and_close(event_bus: Any | None, task_id: int) -> None:
+    """终态事件发布 + 关闭事件流（无总线时静默跳过）。"""
+    if event_bus is None:
+        return
+    task = db.get_task(task_id)
+    if task is not None:
+        event_bus.publish(task_id, task_snapshot(task))
+    event_bus.close(task_id)
 
 
 def recover_interrupted_tasks() -> int:

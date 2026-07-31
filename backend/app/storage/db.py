@@ -55,6 +55,17 @@ CREATE TABLE IF NOT EXISTS task_images (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_task_images_image ON task_images(image_id);
+
+CREATE TABLE IF NOT EXISTS task_phase_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  phase TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  duration_ms INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_phase_logs_task ON task_phase_logs(task_id);
 """
 
 
@@ -101,7 +112,7 @@ def wipe_data() -> None:
     """清空全部业务数据（测试与演示数据管理用）。"""
     with get_conn() as conn:
         conn.executescript(
-            "DELETE FROM task_images; DELETE FROM tasks; DELETE FROM images; DELETE FROM settings;"
+            "DELETE FROM task_phase_logs; DELETE FROM task_images; DELETE FROM tasks; DELETE FROM images; DELETE FROM settings;"
         )
 
 
@@ -265,8 +276,13 @@ def update_task_status(
     phase: str | None = None,
     error: str | None = None,
     result: Any = None,
+    expected_status: str | None = None,
 ) -> bool:
-    """更新任务状态及可选字段（状态机守卫由 service 层负责）。"""
+    """更新任务状态及可选字段（状态机守卫由 service 层负责）。
+
+    传入 expected_status 时按条件更新（WHERE status=expected_status），
+    用于并发场景下防止覆盖其它线程刚写入的状态（如 queued 取消竞态）。
+    """
     sets = ["status=?"]
     params: list[Any] = [status]
     if started_at is not None:
@@ -288,8 +304,12 @@ def update_task_status(
         sets.append("result_json=?")
         params.append(jdumps(result))
     params.append(task_id)
+    sql = f"UPDATE tasks SET {', '.join(sets)} WHERE id=?"
+    if expected_status is not None:
+        sql += " AND status=?"
+        params.append(expected_status)
     with get_conn() as conn:
-        cur = conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id=?", params)
+        cur = conn.execute(sql, params)
         return cur.rowcount > 0
 
 
@@ -300,3 +320,39 @@ def update_task_progress(task_id: int, progress: int, phase: str) -> bool:
             "UPDATE tasks SET progress=?, phase=? WHERE id=?", (progress, phase, task_id)
         )
         return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# task phase logs DAO（D4：阶段时间线）
+# ---------------------------------------------------------------------------
+
+
+def log_phase_start(task_id: int, phase: str, started_at: str) -> int:
+    """记录一个阶段的开始，返回日志 id。"""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO task_phase_logs(task_id, phase, started_at) VALUES(?,?,?)",
+            (task_id, phase, started_at),
+        )
+        return int(cur.lastrowid)
+
+
+def log_phase_finish(log_id: int, finished_at: str, duration_ms: int) -> bool:
+    """记录阶段结束时间与耗时（毫秒）。"""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE task_phase_logs SET finished_at=?, duration_ms=? WHERE id=?",
+            (finished_at, duration_ms, log_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_phase_logs(task_id: int) -> list[dict]:
+    """按开始顺序返回某任务的全部阶段日志。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, phase, started_at, finished_at, duration_ms"
+            " FROM task_phase_logs WHERE task_id=? ORDER BY id",
+            (task_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]

@@ -12,6 +12,8 @@ from app.api import tasks as tasks_api
 from app.config import ensure_dirs
 from app.services import tasks as tasks_svc
 from app.services.executor import TaskExecutor
+from app.services.pipeline_handler import PipelineTaskHandler
+from app.services.task_event_bus import TaskEventBus
 from app.storage import db
 from app.utils.errors import register_exception_handlers
 from app.utils.logging import get_logger, setup_logging
@@ -26,8 +28,13 @@ async def lifespan(app: FastAPI):
     db.init_db()
     # 重启恢复：遗留 processing 任务标记为 failed（原因 restart）
     tasks_svc.recover_interrupted_tasks()
-    # 启动线程池执行器（并发默认 1，PHOTORESTORE_CONCURRENCY 可配）
-    app.state.executor = TaskExecutor()
+    # 事件总线：SSE 进度推送（无订阅者时纯缓冲，不阻塞执行）
+    app.state.event_bus = TaskEventBus()
+    # 启动线程池执行器（并发默认 1，PHOTORESTORE_CONCURRENCY 可配；D4 使用真实管线处理器）
+    app.state.executor = TaskExecutor(
+        handler=PipelineTaskHandler(),
+        event_bus=app.state.event_bus,
+    )
     app.state.executor.start()
     logger.info("PhotoRestore 启动完成")
     try:

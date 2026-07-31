@@ -19,3 +19,17 @@ def client():
     with TestClient(app) as c:
         db.wipe_data()
         yield c
+
+@pytest.fixture(autouse=True)
+def clean_artifact_dirs():
+    """每个测试前清空 outputs/ 与 tmp/（产物与中间文件，保证 hermetic）。"""
+    from app import config
+
+    for directory in (config.OUTPUTS_DIR, config.TMP_DIR):
+        if directory.is_dir():
+            for child in directory.iterdir():
+                if child.is_file():
+                    child.unlink(missing_ok=True)
+        else:
+            directory.mkdir(parents=True, exist_ok=True)
+    yield

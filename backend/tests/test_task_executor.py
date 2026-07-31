@@ -194,11 +194,12 @@ def test_cancel_queued_task(db_ready):
     assert result["finished_at"]
 
 
-def test_cancel_processing_rejected(db_ready):
+def test_cancel_processing_task(db_ready):
     task_id = _make_task()
     db.update_task_status(task_id, TaskStatus.PROCESSING, started_at=now_iso())
-    with pytest.raises(TaskStateError):
-        tasks_svc.cancel_task(task_id)
+    result = tasks_svc.cancel_task(task_id)
+    assert result["status"] == TaskStatus.CANCELLED
+    assert result["finished_at"]
 
 
 def test_cancel_succeeded_rejected(db_ready):
