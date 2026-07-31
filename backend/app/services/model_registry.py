@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 import onnxruntime
 
-from app.config import MODELS_DIR, SUPPORTED_TASK_TYPES
+from app.config import MODEL_META, MODELS_DIR, SUPPORTED_TASK_TYPES
 from app.utils.logging import get_logger
 
 logger = get_logger("model_registry")
@@ -320,3 +320,63 @@ class ModelRegistry:
 
 
 default_registry = ModelRegistry()
+
+def get_model_status(models_dir: Path | None = None) -> dict:
+    """只读模型元数据：按任务类型统计模型文件存在性、体积与就绪状态。
+
+    数据来源：config.MODEL_META + models/ 目录实际文件扫描；
+    仅用于设置页展示与 API 元数据，不加载模型、不修改任何文件。
+    """
+    directory = Path(models_dir) if models_dir is not None else MODELS_DIR
+    known_files = {name for meta in MODEL_META.values() for name in meta["files"]}
+    items: list[dict] = []
+    for key, meta in MODEL_META.items():
+        file_infos: list[dict] = []
+        total_bytes = 0
+        missing: list[str] = []
+        for name in meta["files"]:
+            path = directory / name
+            exists = path.is_file()
+            size_bytes = path.stat().st_size if exists else 0
+            if exists:
+                total_bytes += size_bytes
+            else:
+                missing.append(name)
+            file_infos.append({"name": name, "exists": exists, "size_bytes": size_bytes})
+        items.append(
+            {
+                "key": key,
+                "name": meta["name"],
+                "engine": meta["engine"],
+                "required": bool(meta["required"]),
+                "description": meta.get("description", ""),
+                "files": file_infos,
+                "total_bytes": total_bytes,
+                "missing": missing,
+                "ready": not missing,
+                "download_hint": f"python scripts/download_models.py --only {key}",
+            }
+        )
+    extra_files: list[dict] = []
+    total_bytes = 0
+    if directory.is_dir():
+        for path in sorted(directory.iterdir()):
+            if not path.is_file():
+                continue
+            if path.name not in known_files:
+                extra_files.append({"name": path.name, "size_bytes": path.stat().st_size})
+            else:
+                # 同名文件可能被多个任务类型共享，只按磁盘实际文件计一次体积
+                total_bytes += path.stat().st_size
+    ready = sum(1 for item in items if item["ready"])
+    return {
+        "models_dir": str(directory),
+        "items": items,
+        "extra_files": extra_files,
+        "summary": {
+            "total": len(items),
+            "ready": ready,
+            "missing": len(items) - ready,
+            "total_bytes": total_bytes,
+        },
+    }

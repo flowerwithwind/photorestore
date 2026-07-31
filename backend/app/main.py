@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import health, images
+from app.api import models as models_api
+from app.api import settings as settings_api
 from app.api import storage as storage_api
 from app.api import tasks as tasks_api
 from app.config import ensure_dirs
@@ -62,5 +64,7 @@ app.add_middleware(
 register_exception_handlers(app)
 app.include_router(health.router)
 app.include_router(images.router)
+app.include_router(models_api.router)
+app.include_router(settings_api.router)
 app.include_router(tasks_api.router)
 app.include_router(storage_api.router)

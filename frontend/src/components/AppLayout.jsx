@@ -44,6 +44,9 @@ export default function AppLayout() {
             <NavLink to="/upload" className="nav-link">
               上传
             </NavLink>
+            <NavLink to="/settings" className="nav-link">
+              设置
+            </NavLink>
           </nav>
           <button
             type="button"
