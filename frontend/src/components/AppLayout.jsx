@@ -47,6 +47,9 @@ export default function AppLayout() {
             <NavLink to="/settings" className="nav-link">
               设置
             </NavLink>
+            <NavLink to="/gallery" className="nav-link">
+              画廊
+            </NavLink>
           </nav>
           <button
             type="button"

@@ -7,6 +7,7 @@ import DashboardView from './views/DashboardView'
 import UploadView from './views/UploadView'
 import TaskDetailView from './views/TaskDetailView'
 import SettingsView from './views/SettingsView'
+import GalleryView from './views/GalleryView'
 import './styles/base.css'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -18,6 +19,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/upload" element={<UploadView />} />
           <Route path="/tasks/:taskId" element={<TaskDetailView />} />
           <Route path="/settings" element={<SettingsView />} />
+          <Route path="/gallery" element={<GalleryView />} />
           <Route path="*" element={<DashboardView />} />
         </Route>
       </Routes>
