@@ -33,7 +33,7 @@ export default function AppLayout() {
           <div className="logo">🖼</div>
           <div className="brand-text">
             <span className="brand-name">PhotoRestore</span>
-            <span className="brand-sub">影像修复工作台 · v1.0.0-dev</span>
+            <span className="brand-sub">影像修复工作台 · v1.0.0</span>
           </div>
         </div>
         <div className="topbar-right">

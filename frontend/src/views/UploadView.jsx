@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import UploadDropzone from '../components/UploadDropzone'
 import StatusBadge from '../components/StatusBadge'
-import { registerImage } from '../api/images'
+import { uploadImage } from '../api/images'
 import { createTasksBatch, listTasks, rerunTask, TASK_TYPES } from '../api/tasks'
 import { formatDateTime, shortHash, taskTypeLabel } from '../utils/format'
 import { isTerminal } from '../utils/status'
@@ -128,11 +128,7 @@ export default function UploadView() {
     try {
       const imageIds = []
       for (const entry of selected) {
-        const image = await registerImage({
-          filename: entry.file.name,
-          sizeBytes: entry.file.size,
-          format: entry.format,
-        })
+        const image = await uploadImage(entry.file)
         imageIds.push(image.id)
       }
       // D7：多图同参数一次性批量入队（后端先全量校验，任一失败整体失败无残留）

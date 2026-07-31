@@ -1,6 +1,6 @@
 // D6 images API 测试：列表查询参数 / 删除请求契约 / 最新产物选择
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { deleteImage, imageDownloadUrl, latestOutput, listImages } from './images'
+import { deleteImage, imageDownloadUrl, latestOutput, listImages, uploadImage } from './images'
 
 function okJson(payload) {
   return { ok: true, status: 200, json: async () => payload }
@@ -43,6 +43,19 @@ describe('images API', () => {
     expect(init.method).toBe('DELETE')
     expect(res.deleted).toBe(true)
     expect(res.deleted_task_ids).toEqual([3, 4])
+  })
+
+  it('uploadImage 以 FormData POST /api/images/upload 且不设 JSON Content-Type', async () => {
+    global.fetch.mockResolvedValue(okJson({ id: 42, filename: 'a.png', size_bytes: 2048 }))
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const res = await uploadImage(file)
+    const [url, init] = global.fetch.mock.calls[0]
+    expect(url).toBe('/api/images/upload')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeInstanceOf(FormData)
+    expect(init.headers['Content-Type']).toBeUndefined()
+    expect(init.body.get('file')).toBe(file)
+    expect(res.id).toBe(42)
   })
 
   it('imageDownloadUrl 生成原图下载链接', () => {

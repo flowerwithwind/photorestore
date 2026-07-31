@@ -7,7 +7,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    image: photorestore-backend:latest
+    image: photorestore-backend:v1.0.0
     container_name: photorestore-backend
     environment:
       PHOTORESTORE_DATA_DIR: /app/data
@@ -31,7 +31,7 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-    image: photorestore-frontend:latest
+    image: photorestore-frontend:v1.0.0
     container_name: photorestore-frontend
     depends_on:
       - backend

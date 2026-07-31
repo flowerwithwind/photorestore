@@ -28,13 +28,14 @@ export function buildUrl(path, query) {
 export async function request(path, { method = 'GET', body, query } = {}) {
   const url = buildUrl(path, query)
   const headers = {}
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
+  if (body !== undefined && !isFormData) headers['Content-Type'] = 'application/json'
   let res
   try {
     res = await fetch(url, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? (isFormData ? body : JSON.stringify(body)) : undefined,
     })
   } catch {
     throw new ApiError('网络请求失败：请确认后端服务已启动（127.0.0.1:8030）', { code: 'network_error' })

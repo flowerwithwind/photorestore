@@ -55,6 +55,11 @@ class TaskEventBus:
             with cond:
                 cond.notify_all()
 
+    def latest_seq(self, task_id: int) -> int:
+        """返回任务当前已发布的最大 seq（无事件时为 0），供 SSE 初始快照补 seq。"""
+        with self._lock:
+            return self._seqs.get(task_id, 0)
+
     def close(self, task_id: int) -> None:
         """标记任务事件流关闭（终态后调用）。"""
         with self._lock:

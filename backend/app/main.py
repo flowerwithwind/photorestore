@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="PhotoRestore API",
     description="AI 影像修复工作台后端（本地模型 / 经典算法保底）",
-    version="1.0.0-dev",
+    version="1.0.0",
     lifespan=lifespan,
 )
 

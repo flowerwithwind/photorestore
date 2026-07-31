@@ -23,6 +23,7 @@ def compute_params_hash(params: dict[str, Any]) -> str:
 
 def create_task(image_ids: list[int], task_type: str, params: dict[str, Any]) -> int:
     """校验图像存在并落库一个 queued 任务（入队由 API 层调用 executor）。"""
+    params = validate_task_params(task_type, params)
     missing = [image_id for image_id in image_ids if db.get_image(image_id) is None]
     if missing:
         raise AppError(

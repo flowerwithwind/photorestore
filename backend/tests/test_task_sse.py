@@ -81,8 +81,10 @@ def test_sse_event_stream_snapshot_update_done(client):
     # snapshot/update 快照都包含 D5 前端需要的字段（done 仅 task_id + ts）
     for item in parsed:
         if item["event"] in {"snapshot", "update"}:
-            for key in ("task_id", "status", "progress", "phase"):
+            for key in ("task_id", "task_type", "status", "progress", "phase",
+                        "params_hash", "error", "result", "ts", "seq"):
                 assert key in item["data"]
+            assert isinstance(item["data"]["seq"], int)
 
     updates = [item["data"] for item in parsed if item["event"] == "update"]
     statuses = [item["status"] for item in updates]
@@ -93,9 +95,16 @@ def test_sse_event_stream_snapshot_update_done(client):
     assert last_update["progress"] == 100
     assert last_update["phase"] == "save"
 
+    # seq 契约：snapshot 携带当前最新 seq（可能为 0），update 单调递增
+    seqs = [snapshot["seq"], *[u["seq"] for u in updates]]
+    assert all(isinstance(s, int) and s >= 0 for s in seqs)
+    assert seqs == sorted(seqs)
+    assert seqs[-1] >= len(updates)
+
     done = parsed[-1]["data"]
     assert done["task_id"] == task_id
     assert done["ts"]
+    assert set(done.keys()) == {"task_id", "ts"}  # done 仅 task_id + ts
 
 
 def test_sse_finished_task_immediate_done(client):

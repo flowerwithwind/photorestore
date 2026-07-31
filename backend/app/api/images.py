@@ -1,7 +1,8 @@
 """图片元数据 API。
 
 D2 先登记元数据（供任务入队引用）；D6 扩展为画廊服务：
-列表（含任务摘要/产物）、原图下载、演示种子图片、级联删除（图片+任务+产物）。
+列表（含任务摘要/产物）、原图下载、演示种子图片、级联删除（图片+任务+产物）；
+D10 增加真实字节上传（multipart /api/images/upload）。
 """
 from __future__ import annotations
 
@@ -10,9 +11,9 @@ import binascii
 import io
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -65,6 +66,41 @@ def create_image(body: ImageCreate) -> dict:
     return db.get_image(image_id)
 
 
+@router.post("/upload", status_code=201)
+async def upload_image(file: Annotated[UploadFile, File()]) -> dict:
+    """真实字节上传（D10）：multipart 文件 → 扩展名/大小/PIL 内容校验 → 规范化落盘并登记。
+
+    - 扩展名不在 ALLOWED_EXTENSIONS → 400 unsupported_format；
+    - 字节数超过 MAX_UPLOAD_BYTES → 413 image_too_large（边读边限，不整块载入内存）；
+    - 内容无法解码（非图片/损坏）→ 400 invalid_image；
+    - 超大尺寸图片由管线等比缩放到 MAX_IMAGE_DIMENSION 内（不拒绝，记录原始尺寸）。
+    """
+    original = Path(file.filename or "").name
+    ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+    if ext not in config.ALLOWED_EXTENSIONS:
+        raise AppError(
+            "unsupported_format",
+            f"不支持的图片格式: {original or '(无文件名)'}",
+            details={"allowed": sorted(config.ALLOWED_EXTENSIONS)},
+        )
+    data = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        data.extend(chunk)
+        if len(data) > config.MAX_UPLOAD_BYTES:
+            raise AppError(
+                "image_too_large",
+                f"图片超过大小限制 {config.MAX_UPLOAD_BYTES // 1024 // 1024}MB",
+                status_code=413,
+                details={"max_bytes": config.MAX_UPLOAD_BYTES},
+            )
+    if not data:
+        raise AppError("empty_image", "图片数据为空", status_code=400)
+    return _normalize_and_register(bytes(data), original, prefix="upload")
+
+
 @router.get("")
 def list_images(
     task_type: str | None = None,
@@ -103,8 +139,13 @@ def seed_image(body: SeedImage) -> dict:
             status_code=413,
             details={"max_bytes": config.MAX_UPLOAD_BYTES},
         )
+    return _normalize_and_register(raw, body.filename, prefix="seed")
+
+
+def _normalize_and_register(data: bytes, filename: str, *, prefix: str = "upload") -> dict:
+    """PIL 校验 + RGB 规范化后写入 uploads/ 并登记，返回图片记录（seed 与 upload 共用）。"""
     try:
-        with Image.open(io.BytesIO(raw)) as img:
+        with Image.open(io.BytesIO(data)) as img:
             fmt = (img.format or "jpeg").lower()
             if fmt == "jpg":
                 fmt = "jpeg"
@@ -117,18 +158,18 @@ def seed_image(body: SeedImage) -> dict:
             normalized = img.convert("RGB")
             buffer = io.BytesIO()
             normalized.save(buffer, format="JPEG" if fmt == "jpeg" else fmt.upper())
-            data = buffer.getvalue()
+            payload = buffer.getvalue()
     except AppError:
         raise
     except Exception as exc:  # noqa: BLE001 - PIL 解码失败统一转业务错误
         raise AppError("invalid_image", f"图片内容无法解码: {exc}", status_code=400)
-    safe_name = Path(body.filename).name or "seed.jpg"
-    unique_name = f"seed_{uuid.uuid4().hex[:8]}_{safe_name}"
+    safe_name = Path(filename).name or "image.jpg"
+    unique_name = f"{prefix}_{uuid.uuid4().hex[:8]}_{safe_name}"
     target = config.UPLOADS_DIR / unique_name
-    target.write_bytes(data)
+    target.write_bytes(payload)
     image_id = db.create_image(
         filename=unique_name,
-        size_bytes=len(data),
+        size_bytes=len(payload),
         format_=fmt,
         path=str(target),
     )

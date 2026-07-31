@@ -4,10 +4,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import UploadView from './UploadView'
 import { createTasksBatch, listTasks, rerunTask } from '../api/tasks'
-import { registerImage } from '../api/images'
+import { uploadImage } from '../api/images'
 
 vi.mock('../api/images', () => ({
-  registerImage: vi.fn().mockResolvedValue({ id: 101 }),
+  uploadImage: vi.fn().mockResolvedValue({ id: 101 }),
 }))
 
 vi.mock('../api/tasks', () => ({
@@ -91,7 +91,7 @@ describe('UploadView D7', () => {
     fireEvent.change(screen.getByTestId('denoise-h'), { target: { value: '8' } })
     fireEvent.click(screen.getByTestId('submit-btn'))
 
-    await waitFor(() => expect(registerImage).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(uploadImage).toHaveBeenCalledTimes(2))
     await waitFor(() =>
       expect(createTasksBatch).toHaveBeenCalledWith({
         imageIds: [101, 101],

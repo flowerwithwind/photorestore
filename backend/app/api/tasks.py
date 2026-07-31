@@ -121,7 +121,9 @@ async def stream_task_events(task_id: int, request: Request) -> StreamingRespons
 
 async def _event_stream(task_id: int, event_bus: Any):
     task = db.get_task(task_id)
-    yield _sse("snapshot", task_snapshot(task))
+    snapshot = task_snapshot(task)
+    snapshot["seq"] = event_bus.latest_seq(task_id)
+    yield _sse("snapshot", snapshot)
     if task is not None and task["status"] in TERMINAL_STATUSES:
         # 已终态：补发缓冲事件后立即 done（含并发订阅前已完成的任务）
         events, _ = await asyncio.to_thread(event_bus.poll, task_id, 0, 0.2)

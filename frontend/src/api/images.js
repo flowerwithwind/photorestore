@@ -5,6 +5,13 @@ export function registerImage({ filename, sizeBytes, format }) {
   return post('/images', { filename, size_bytes: sizeBytes, format })
 }
 
+/** D10：真实字节上传（multipart FormData）→ /api/images/upload，返回登记后的 image 对象。 */
+export function uploadImage(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request('/images/upload', { method: 'POST', body: formData })
+}
+
 export function listImages({ taskType, status, limit = 20, offset = 0 } = {}) {
   return get('/images', { task_type: taskType, status, limit, offset })
 }
