@@ -25,12 +25,34 @@ OUTPUT_QUALITY = 92
 WORKER_CONCURRENCY = int(os.environ.get("PHOTORESTORE_CONCURRENCY", "1"))
 TASK_TIMEOUT_SECONDS = int(os.environ.get("PHOTORESTORE_TASK_TIMEOUT", "300"))
 
-# 模型注册表元信息（D3 细化；D1 仅用于能力上报与下载脚本）
+# 模型注册表元信息（D3 细化：文件清单 + 是否必需 + 引擎说明）
 MODEL_META: dict[str, dict] = {
-    "restore": {"key": "restore", "name": "去噪去模糊", "files": ["realesrgan-x4.onnx"], "required": False},
-    "upscale": {"key": "upscale", "name": "超分辨率", "files": ["realesrgan-x2.onnx", "realesrgan-x4.onnx"], "required": False},
-    "colorize": {"key": "colorize", "name": "黑白上色", "files": ["ddcolor.onnx"], "required": False},
+    "restore": {
+        "key": "restore",
+        "name": "去噪去模糊",
+        "engine": "classic+realesrgan",
+        "files": ["realesrgan-x4.onnx"],
+        "required": False,
+        "description": "OpenCV 经典算法保底（fastNlMeansDenoising + 维纳去模糊），可选 Real-ESRGAN",
+    },
+    "upscale": {
+        "key": "upscale",
+        "name": "超分辨率",
+        "engine": "realesrgan",
+        "files": ["realesrgan-x2.onnx", "realesrgan-x4.onnx"],
+        "required": True,
+        "description": "Real-ESRGAN ONNX ×2/×4",
+    },
+    "colorize": {
+        "key": "colorize",
+        "name": "黑白上色",
+        "engine": "ddcolor",
+        "files": ["ddcolor.onnx"],
+        "required": True,
+        "description": "DDColor ONNX（或等价替代模型）",
+    },
 }
+SUPPORTED_TASK_TYPES: tuple[str, ...] = tuple(MODEL_META)
 
 
 def ensure_dirs() -> None:

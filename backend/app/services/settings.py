@@ -11,6 +11,16 @@ def get_capabilities() -> dict:
         "demo_mode": True,
         "engine": "classic+onnx",
         "model_count": len(MODEL_META),
+        "task_types": list(MODEL_META),
+        "models": {
+            key: {
+                "name": meta["name"],
+                "files": list(meta["files"]),
+                "required": bool(meta["required"]),
+                "engine": meta["engine"],
+            }
+            for key, meta in MODEL_META.items()
+        },
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "worker_concurrency": WORKER_CONCURRENCY,
     }
