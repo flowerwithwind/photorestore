@@ -33,3 +33,11 @@ class TaskCreate(BaseModel):
     image_ids: list[int] = Field(default_factory=list, min_length=1)
     task_type: TaskType
     params: dict[str, Any] = Field(default_factory=dict)
+
+
+class BatchTaskCreate(BaseModel):
+    """D7 批量任务请求：多图同参数，原子创建（任一校验失败整体失败、无残留）。"""
+
+    image_ids: list[int] = Field(default_factory=list, min_length=1)
+    task_type: TaskType
+    params: dict[str, Any] = Field(default_factory=dict)

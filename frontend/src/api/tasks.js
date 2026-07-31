@@ -26,3 +26,12 @@ export function taskEventsUrl(taskId) {
 export function outputDownloadUrl(taskId, index) {
   return `/api/tasks/${taskId}/outputs/${index}/download`
 }
+
+// D7：批量入队（多图同参数，原子创建）与任务重跑（复用原参数，新版本产物）
+export function createTasksBatch({ imageIds, taskType, params }) {
+  return post('/tasks/batch', { image_ids: imageIds, task_type: taskType, params })
+}
+
+export function rerunTask(taskId) {
+  return post(`/tasks/${taskId}/rerun`)
+}

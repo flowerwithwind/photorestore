@@ -26,6 +26,8 @@ vi.mock('../api/tasks', () => ({
   TASK_TYPES: ['restore', 'upscale', 'colorize'],
   listTasks: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   createTask: vi.fn(),
+  createTasksBatch: vi.fn().mockResolvedValue({ task_ids: [1], count: 1, status: 'queued' }),
+  rerunTask: vi.fn().mockResolvedValue({ task_id: 2, status: 'queued', source_task_id: 1 }),
   cancelTask: vi.fn().mockResolvedValue({}),
   getTaskDetail: vi.fn(),
   taskEventsUrl: vi.fn((id) => `/api/tasks/${id}/events`),

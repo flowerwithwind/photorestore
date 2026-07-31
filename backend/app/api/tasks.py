@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
-from app.models import TaskCreate, TaskStatus, now_iso
+from app.models import BatchTaskCreate, TaskCreate, TaskStatus, now_iso
 from app.services import tasks as tasks_svc
 from app.services.task_event_bus import task_snapshot
 from app.services.task_state import TERMINAL_STATUSES
@@ -39,6 +39,36 @@ def create_task(body: TaskCreate, request: Request) -> dict:
     if executor is not None:
         executor.enqueue(task_id)
     return {"task_id": task_id, "status": TaskStatus.QUEUED.value}
+
+
+@router.post("/batch", status_code=201)
+def create_tasks_batch(body: BatchTaskCreate, request: Request) -> dict:
+    """批量创建任务（D7）：多图同参数，先全量校验后原子入队，返回 task_id 列表。
+
+    任一图像缺失/参数非法时整体失败（无残留）；每张图像独立成任务，
+    便于独立追踪进度与产物（同图多次处理生成多版本，互不覆盖）。
+    """
+    task_ids = tasks_svc.create_tasks_batch(body.image_ids, body.task_type.value, body.params)
+    executor = getattr(request.app.state, "executor", None)
+    if executor is not None:
+        for task_id in task_ids:
+            executor.enqueue(task_id)
+    return {
+        "task_ids": task_ids,
+        "count": len(task_ids),
+        "status": TaskStatus.QUEUED.value,
+    }
+
+
+@router.post("/{task_id}/rerun")
+def rerun_task(task_id: int, request: Request) -> dict:
+    """重跑任务（D7）：复用原任务参数重新入队；原任务非终态返回 409（task_not_terminal）。"""
+    created = tasks_svc.rerun_task(task_id)
+    executor = getattr(request.app.state, "executor", None)
+    if executor is not None:
+        executor.enqueue(created["task_id"])
+    return created
+
 
 
 @router.get("")

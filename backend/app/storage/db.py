@@ -180,6 +180,110 @@ def list_images() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+
+def list_images_with_tasks(
+    *,
+    task_type: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    """画廊视图（D6）：按图像列表返回，并附带每张图像关联的任务。
+
+    返回 {"items": [...], "total": N}；可选按任务类型/状态过滤（EXISTS 子查询）。
+    """
+    conditions: list[str] = []
+    params: list[Any] = []
+    if task_type is not None:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM task_images ti JOIN tasks t ON t.id = ti.task_id"
+            " WHERE ti.image_id = images.id AND t.task_type = ?)"
+        )
+        params.append(task_type)
+    if status is not None:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM task_images ti JOIN tasks t ON t.id = ti.task_id"
+            " WHERE ti.image_id = images.id AND t.status = ?)"
+        )
+        params.append(status)
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    with get_conn() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM images{where}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT id, filename, size_bytes, format, path, created_at"
+            f" FROM images{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+        items = [dict(r) for r in rows]
+        image_ids = [item["id"] for item in items]
+        by_image: dict[int, list[int]] = {}
+        if image_ids:
+            placeholders = ",".join("?" * len(image_ids))
+            link_rows = conn.execute(
+                f"SELECT task_id, image_id FROM task_images"
+                f" WHERE image_id IN ({placeholders}) ORDER BY task_id",
+                image_ids,
+            ).fetchall()
+            for r in link_rows:
+                by_image.setdefault(r["image_id"], []).append(r["task_id"])
+            task_ids = sorted({tid for tids in by_image.values() for tid in tids})
+            tasks_by_id: dict[int, dict] = {}
+            if task_ids:
+                t_placeholders = ",".join("?" * len(task_ids))
+                task_rows = conn.execute(
+                    f"SELECT * FROM tasks WHERE id IN ({t_placeholders})", task_ids
+                ).fetchall()
+                tasks_by_id = {t["id"]: _row_to_task(t) for t in task_rows}
+        for item in items:
+            item["tasks"] = [
+                tasks_by_id[tid] for tid in by_image.get(item["id"], []) if tid in tasks_by_id
+            ]
+        return {"items": items, "total": int(total)}
+
+
+def get_image_tasks(image_id: int) -> list[dict]:
+    """按图像查询其全部关联任务（按 id 倒序，含状态/参数/结果）。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT t.* FROM tasks t JOIN task_images ti ON ti.task_id = t.id"
+            " WHERE ti.image_id = ? ORDER BY t.id DESC",
+            (image_id,),
+        ).fetchall()
+        return [_row_to_task(r) for r in rows]
+
+
+def delete_image_cascade(image_id: int) -> dict | None:
+    """删除图片及其关联任务（级联 task_images/task_phase_logs），返回待清理文件信息。
+
+    返回 {"image_path": str, "task_ids": [...], "output_paths": [...]}；
+    图片不存在时返回 None。文件系统清理由调用方负责。
+    """
+    with get_conn() as conn:
+        image = conn.execute("SELECT path FROM images WHERE id=?", (image_id,)).fetchone()
+        if image is None:
+            return None
+        rows = conn.execute(
+            "SELECT task_id FROM task_images WHERE image_id=? ORDER BY task_id", (image_id,)
+        ).fetchall()
+        task_ids = [int(r["task_id"]) for r in rows]
+        output_paths: list[str] = []
+        for task_id in task_ids:
+            task = conn.execute(
+                "SELECT result_json FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            result = jloads(task["result_json"], {}) if task and task["result_json"] else {}
+            if isinstance(result, dict):
+                for out in result.get("outputs") or []:
+                    if isinstance(out, dict) and out.get("path"):
+                        output_paths.append(out["path"])
+            conn.execute("DELETE FROM task_phase_logs WHERE task_id=?", (task_id,))
+            conn.execute("DELETE FROM task_images WHERE task_id=?", (task_id,))
+            conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        conn.execute("DELETE FROM task_images WHERE image_id=?", (image_id,))
+        conn.execute("DELETE FROM images WHERE id=?", (image_id,))
+        return {"image_path": image["path"], "task_ids": task_ids, "output_paths": output_paths}
+
+
 # ---------------------------------------------------------------------------
 # tasks DAO
 # ---------------------------------------------------------------------------
@@ -225,6 +329,38 @@ def create_task(
             [(task_id, image_id) for image_id in image_ids],
         )
         return task_id
+
+def create_tasks_batch(
+    *,
+    task_type: str,
+    status: str,
+    params: dict[str, Any],
+    params_hash: str,
+    image_ids: list[int],
+    created_at: str | None = None,
+) -> list[int]:
+    """原子批量创建任务（D7）：每张图像一个任务，单事务写入全部 tasks + task_images。
+
+    任一插入失败（含外键约束）时整体回滚，不留任何残留记录；
+    返回按输入顺序的 task_id 列表。
+    """
+    ts = created_at or now_iso()
+    task_ids: list[int] = []
+    with get_conn() as conn:
+        for image_id in image_ids:
+            cur = conn.execute(
+                "INSERT INTO tasks(task_type, status, progress, phase, params_json, params_hash, created_at)"
+                " VALUES(?,?,0,NULL,?,?,?)",
+                (task_type, status, jdumps(params), params_hash, ts),
+            )
+            task_id = int(cur.lastrowid)
+            conn.execute(
+                "INSERT INTO task_images(task_id, image_id) VALUES(?,?)",
+                (task_id, image_id),
+            )
+            task_ids.append(task_id)
+        return task_ids
+
 
 
 def get_task(task_id: int) -> dict | None:
