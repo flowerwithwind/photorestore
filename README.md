@@ -138,3 +138,18 @@ npm run dev
 - 前端：React + Vite + ECharts（D5 起）
 - 部署：Docker Compose（backend uvicorn :8030 + frontend nginx :5175，SSE 反代）
 - 质量：pytest 158 passed + ruff 0 错误 + vitest 73 passed + build exit 0（CI 执行，暂不自动部署）
+
+## 服务器自动部署（端口 18103 / 18183）
+
+`git push origin main` 触发 GitHub Actions `Deploy PhotoRestore`：测试 → 构建推送 Docker Hub 镜像（`flowerwithwind/photorestore-backend` / `photorestore-frontend`）→ SSH 部署到 `/opt/photorestore`（后端 18103，浏览器 18183）。
+
+仓库 Secrets 需配置：`DOCKER_USERNAME` `DOCKER_PASSWORD` `SERVER_HOST` `SERVER_USER` `SERVER_PASSWORD`（可选：`SERVER_PORT` `BACKEND_PORT` `HTTP_PORT` `PHOTORESTORE_CONCURRENCY`）。
+
+模型说明：restore 有经典算法保底，无模型也可演示；upscale/colorize 需要真实 ONNX 模型（当前 `scripts/download_models.py` 的 URL 为占位符，部署时会尝试下载但不会阻塞）。
+
+服务器一次性准备：
+
+```bash
+sudo mkdir -p /opt/photorestore && sudo chown -R ubuntu:ubuntu /opt/photorestore
+sudo ufw allow 18103/tcp && sudo ufw allow 18183/tcp
+```

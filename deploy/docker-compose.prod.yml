@@ -1,0 +1,61 @@
+# PhotoRestore 生产编排（服务器目录 /opt/photorestore，由 GitHub Actions deploy.yml 生成）
+# 对外端口：后端 18103，浏览器 18183
+services:
+  backend:
+    image: ${DOCKER_USERNAME}/photorestore-backend:${IMAGE_TAG:-latest}
+    container_name: photorestore-backend
+    restart: unless-stopped
+    environment:
+      PHOTORESTORE_DATA_DIR: /app/data
+      PHOTORESTORE_MODELS_DIR: /app/models
+      PHOTORESTORE_CONCURRENCY: ${PHOTORESTORE_CONCURRENCY:-1}
+      PHOTORESTORE_TASK_TIMEOUT: "300"
+      # 限制 ONNX/OpenCV 线程，降低 CPU 与内存占用
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      TZ: Asia/Shanghai
+    volumes:
+      - photorestore-data:/app/data
+      - photorestore-models:/app/models
+    ports:
+      - "${BACKEND_PORT:-18103}:8030"
+    mem_limit: 1536m
+    cpus: "2.0"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8030/api/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    image: ${DOCKER_USERNAME}/photorestore-frontend:${IMAGE_TAG:-latest}
+    container_name: photorestore-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-18183}:80"
+    mem_limit: 128m
+    cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  photorestore-data:
+  photorestore-models:

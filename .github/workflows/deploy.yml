@@ -1,0 +1,214 @@
+name: Deploy PhotoRestore
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-test:
+    name: Backend (pytest + ruff)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Ruff check
+        run: ruff check .
+      - name: Pytest
+        run: pytest
+
+  frontend-test:
+    name: Frontend (build + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  gate:
+    name: Check optional server publish configuration
+    needs: [backend-test, frontend-test]
+    runs-on: ubuntu-latest
+    outputs:
+      docker_ready: ${{ steps.check.outputs.docker_ready }}
+      remote_ready: ${{ steps.check.outputs.remote_ready }}
+    env:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+      SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+    steps:
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker_ready=false
+          remote_ready=false
+          if [[ -n "$DOCKER_USERNAME" && -n "$DOCKER_PASSWORD" ]]; then
+            docker_ready=true
+          fi
+          if [[ -n "$SERVER_HOST" && -n "$DOCKER_USERNAME" && -n "$DOCKER_PASSWORD" && -n "$SERVER_USER" && -n "$SERVER_PASSWORD" ]]; then
+            remote_ready=true
+          elif [[ -n "$SERVER_HOST" ]]; then
+            echo "::notice::Server deployment is not fully configured yet; the remote restart steps will be skipped."
+          fi
+          echo "docker_ready=$docker_ready" >> "$GITHUB_OUTPUT"
+          echo "remote_ready=$remote_ready" >> "$GITHUB_OUTPUT"
+
+  server:
+    name: Build, publish and deploy
+    needs: [gate]
+    if: needs.gate.outputs.docker_ready == 'true'
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+      SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT }}
+      BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
+      HTTP_PORT: ${{ secrets.HTTP_PORT }}
+      SERVER_PUBLIC_URL: ${{ secrets.SERVER_PUBLIC_URL }}
+      PHOTORESTORE_CONCURRENCY: ${{ secrets.PHOTORESTORE_CONCURRENCY }}
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.DOCKER_USERNAME }}/photorestore-backend:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/photorestore-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.DOCKER_USERNAME }}/photorestore-frontend:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_USERNAME }}/photorestore-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Prepare deployment bundle
+        if: needs.gate.outputs.remote_ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf deploy-bundle
+          mkdir -p deploy-bundle
+          cp deploy/docker-compose.prod.yml deploy-bundle/docker-compose.yml
+          cp deploy/remote-up.sh deploy-bundle/remote-up.sh
+          chmod +x deploy-bundle/remote-up.sh
+          BACKEND_PORT="${BACKEND_PORT:-18103}"
+          HTTP_PORT="${HTTP_PORT:-18183}"
+          PUBLIC_URL="${SERVER_PUBLIC_URL:-http://${SERVER_HOST}:${HTTP_PORT}}"
+          {
+            printf 'DOCKER_USERNAME=%s\n' "$DOCKER_USERNAME"
+            printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG"
+            printf 'BACKEND_PORT=%s\n' "$BACKEND_PORT"
+            printf 'HTTP_PORT=%s\n' "$HTTP_PORT"
+            printf 'SERVER_PUBLIC_URL=%s\n' "$PUBLIC_URL"
+            printf 'PHOTORESTORE_CONCURRENCY=%s\n' "${PHOTORESTORE_CONCURRENCY:-1}"
+          } > deploy-bundle/.env
+          printf '%s' "$DOCKER_PASSWORD" > deploy-bundle/.docker_password
+          chmod 600 deploy-bundle/.env deploy-bundle/.docker_password
+          tar -C deploy-bundle -czf deploy-bundle.tgz .
+
+      - name: Ensure remote directory
+        if: needs.gate.outputs.remote_ready == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          password: ${{ env.SERVER_PASSWORD }}
+          port: ${{ env.SERVER_PORT != '' && env.SERVER_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            if [ ! -w /opt/photorestore ] 2>/dev/null; then
+              sudo mkdir -p /opt/photorestore
+              sudo chown -R "$(id -un):$(id -gn)" /opt/photorestore || true
+            fi
+            mkdir -p /opt/photorestore
+
+      - name: Upload deployment bundle
+        if: needs.gate.outputs.remote_ready == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          password: ${{ env.SERVER_PASSWORD }}
+          port: ${{ env.SERVER_PORT != '' && env.SERVER_PORT || 22 }}
+          source: deploy-bundle.tgz
+          target: /opt/photorestore
+          overwrite: true
+
+      - name: Pull and start remote service
+        if: needs.gate.outputs.remote_ready == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          REMOTE_DOCKER_PASS: ${{ env.DOCKER_PASSWORD }}
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          password: ${{ env.SERVER_PASSWORD }}
+          port: ${{ env.SERVER_PORT != '' && env.SERVER_PORT || 22 }}
+          envs: REMOTE_DOCKER_PASS
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            cd /opt/photorestore
+            tar -xzf deploy-bundle.tgz
+            rm -f deploy-bundle.tgz
+            chmod +x remote-up.sh
+            export DOCKER_PASSWORD="${REMOTE_DOCKER_PASS:-}"
+            export APP_DIR=/opt/photorestore
+            PORT="$(grep -E '^HTTP_PORT=' .env | tail -n1 | cut -d= -f2-)"
+            PORT="${PORT:-18183}"
+            export HEALTH_URL="http://127.0.0.1:${PORT}/healthz"
+            ./remote-up.sh
+            docker compose ps
+            curl -fsS "http://127.0.0.1:${PORT}/healthz"
+            curl -fsS "http://127.0.0.1:${PORT}/" >/dev/null
