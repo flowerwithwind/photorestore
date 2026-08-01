@@ -39,8 +39,14 @@ run_root() {
   else "$@"; fi
 }
 
-force_registry_mirrors() {
-  echo "==> Configure registry-mirrors"
+ensure_registry_mirrors() {
+  local cfg
+  cfg="$(run_root sh -c 'cat /etc/docker/daemon.json 2>/dev/null' || true)"
+  if [[ "$cfg" == *'"registry-mirrors"'* && "$cfg" == *'docker.m.daocloud.io'* ]]; then
+    echo "==> registry-mirrors already configured, skip (no docker restart)"
+    return 0
+  fi
+  echo "==> Configure registry-mirrors (first time only)"
   run_root mkdir -p /etc/docker
   [[ -f /etc/docker/daemon.json ]] && run_root cp /etc/docker/daemon.json "/etc/docker/daemon.json.bak.$(date +%s)" || true
   run_root tee /etc/docker/daemon.json >/dev/null <<'EOF'
@@ -78,7 +84,7 @@ docker_login_optional() {
   rm -f .docker_password 2>/dev/null || true
 }
 
-force_registry_mirrors
+ensure_registry_mirrors
 docker_login_optional
 
 IMAGE="${DOCKER_USERNAME}/photorestore-frontend:${IMAGE_TAG}"
@@ -87,7 +93,7 @@ for i in 1 2 3 4 5; do
   if docker compose pull; then break; fi
   if docker pull "$IMAGE"; then break; fi
   echo "pull fail $i/5"; sleep $((i * 6))
-  [[ "$i" -eq 2 ]] && force_registry_mirrors
+  [[ "$i" -eq 2 ]] && ensure_registry_mirrors
   [[ "$i" -eq 5 ]] && exit 1
 done
 echo "==> Try model download (non-blocking; restore has classic fallback)"
