@@ -28,7 +28,6 @@ jobs:
         run: pytest
 
   frontend:
-    if: hashFiles('frontend/package.json') != ''
     runs-on: ubuntu-latest
     defaults:
       run:
